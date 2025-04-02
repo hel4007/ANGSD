@@ -1,0 +1,232 @@
+---
+title: 'Finish Alignment and Read Count'
+author: "He Li hel4007"
+date: "2025-03-31"
+output: 
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Download Data
+
+```{bash download, eval=FALSE}
+
+conda activate angsd
+
+#!/bin/bash
+#SBATCH --job-name=data_download     
+#SBATCH --output=Data_download.out
+#SBATCH --error=Data_download.err 
+#SBATCH --time=12:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH -p angsd_class
+
+SRA_LIST=("SRR28279790" "SRR28279788" "SRR28279792")
+declare -A NAME_MAP=(
+  ["SRR28279790"]="female_openEye_Z08_90"
+  ["SRR28279788"]="female_occludedEye_Z08_88"
+  ["SRR28279792"]="female_occludedEye_Z08_92"
+)
+
+DEST_DIR="/athena/angsd/scratch/hel4007/project/alignments"
+mkdir -p "${DEST_DIR}"
+
+# Download, rename, and bgzip
+for RUN_ID in "${SRA_LIST[@]}"; do
+  NEW_NAME="${NAME_MAP[$RUN_ID]}"
+
+  echo "=== Processing $RUN_ID -> $NEW_NAME ==="
+
+  # Download
+  fastq-dump --split-3 --outdir "${DEST_DIR}" "${RUN_ID}"
+
+  # Rename
+  mv "${DEST_DIR}/${RUN_ID}_1.fastq" "${DEST_DIR}/${NEW_NAME}_1.fastq"
+  mv "${DEST_DIR}/${RUN_ID}_2.fastq" "${DEST_DIR}/${NEW_NAME}_2.fastq"
+
+  # bgzip
+  bgzip -@ 16 "${DEST_DIR}/${NEW_NAME}_1.fastq"
+  bgzip -@ 16 "${DEST_DIR}/${NEW_NAME}_2.fastq"
+done
+
+echo "All downloads and compressions done in ${DEST_DIR}."
+
+sbatch data_download.sh
+
+```
+
+## Alignment using STAR
+```{bash alignment, eval=FALSE}
+#!/bin/bash
+#SBATCH --job-name=STAR_alignment
+#SBATCH --output=STAR_alignment.out
+#SBATCH --error=STAR_alignment.err
+#SBATCH --time=12:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH -p angsd_class
+SAMPLES=("female_openEye_Z08_90" "female_occludedEye_Z08_88" "female_occludedEye_Z08_92")
+ALIGN_DIR="/athena/angsd/scratch/hel4007/project/alignments"
+GENOME_DIR="GRCg7b_STARindex"
+THREADS=16
+
+for SAMPLE in "${SAMPLES[@]}"; do
+  STAR --runMode alignReads \
+       --runThreadN "$THREADS" \
+       --genomeDir "$GENOME_DIR" \
+       --readFilesIn "${ALIGN_DIR}/${SAMPLE}_1.fastq.gz" "${ALIGN_DIR}/${SAMPLE}_2.fastq.gz" \
+       --readFilesCommand zcat \
+       --outFileNamePrefix "${ALIGN_DIR}/${SAMPLE}.star." \
+       --outSAMtype BAM SortedByCoordinate \
+       --genomeSAindexNbases 13
+done
+
+sbatch star_alignment.sh
+```
+## Feature count
+```{bash count, eval=FALSE}
+ANNOTATION="/athena/angsd/scratch/hel4007/project/alignments/chickannotation.gtf"
+ALIGN_DIR="/athena/angsd/scratch/hel4007/project/alignments"
+THREADS=16
+
+ls "${ALIGN_DIR}"/*.star.Aligned.sortedByCoord.out.bam > bam_list.txt
+
+featureCounts \
+  -T "${THREADS}" \
+  -a "${ANNOTATION}" \
+  -o gene_counts.txt \
+  -p -B -C -s 2 \
+  $(cat bam_list.txt)
+```
+
+
+## QC and Processing
+
+```{r first-step processing, message = FALSE, warning=FALSE, eval = TRUE}
+library(DESeq2)
+library(ggplot2)
+library(RColorBrewer)
+library(pheatmap)
+
+gene_counts_table <- read.delim(
+  "gene_counts.txt",
+  comment.char = "#",
+  header = TRUE
+)
+
+rownames(gene_counts_table) <- gene_counts_table$Geneid
+
+gene_counts_matrix <- gene_counts_table[, -c(1:6)]
+
+
+# Rename columns to the four sample names
+colnames(gene_counts_matrix) <- c(
+  "OpenEye_86", 
+  "OpenEye_90", 
+  "OcclEye_88", 
+  "OcclEye_92"
+)
+
+sample_info <- data.frame(
+  row.names = c("OpenEye_86", "OpenEye_90", "OcclEye_88", "OcclEye_92"),
+  condition = c("openEye", "openEye", "occludedEye", "occludedEye")
+)
+
+# filter out low-expression genes
+dds <- DESeqDataSetFromMatrix(
+  countData = gene_counts_matrix,
+  colData   = sample_info,
+  design    = ~ condition
+)
+
+keep <- rowSums(counts(dds) >= 10) >= 2
+dds <- dds[keep, ]
+
+dds <- DESeq(dds)
+```
+
+### Visualization of Normalization
+```{r normalization, eval = TRUE}
+# Compare raw vs. normalized counts
+boxplot(
+  log2(counts(dds) + 1),
+  main = "Raw Counts (log2)",
+  las  = 2,
+  ylab = "log2(count + 1)",
+  col  = "lightblue"
+)
+
+boxplot(
+  log2(counts(dds, normalized=TRUE) + 1),
+  main = "Normalized Counts (log2)",
+  las  = 2,
+  ylab = "log2(count + 1)",
+  col  = "lightgreen"
+)
+
+# Visualize counts for a particular gene
+geneOfInterest <- rownames(dds)[1] 
+plotCounts(
+  dds,
+  gene     = geneOfInterest,
+  intgroup = "condition",
+  main     = paste("Counts for gene:", geneOfInterest)
+)
+```
+
+### Variance-stabilizing transformation (or not?)
+```{r vst, eval = TRUE}
+# Do we need Variance-stabilizing transformation?
+norm_counts <- counts(dds, normalized=TRUE)
+gene_means <- rowMeans(norm_counts)
+gene_vars  <- apply(norm_counts, 1, var)
+
+# Plot variance vs. mean on log scales
+plot(log2(gene_means), log2(gene_vars),
+     xlab = "Log2(Mean of normalized counts)",
+     ylab = "Log2(Variance of normalized counts)",
+     main = "Variance vs. Mean (normalized counts)")
+
+# add a reference line or smoothing
+abline(lm(log2(gene_vars) ~ log2(gene_means)), col="red", lty=2)
+
+# Variance-stabilizing transformation
+vsd <- vst(dds, blind=TRUE)
+```
+The plot above indicates that there is some variance-mean dependence for genes with low read counts. This means that the data shows signs of heteroskedasticity. As a result, variance-stabilizing transformation is needed.
+
+### PCA and heatmap
+```{r processing, message=FALSE, eval = TRUE}
+# PCA
+pcaData <- plotPCA(vsd, intgroup="condition", returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+ggplot(pcaData, aes(PC1, PC2, color=condition)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_bw() +
+  ggtitle("PCA of VST-transformed Counts")
+
+# Pearson correlation heatmap
+corMatrix <- cor(assay(vsd), method="pearson")
+distMatrix <- as.dist(1 - corMatrix)
+
+pheatmap(
+  corMatrix,
+  clustering_distance_rows = distMatrix,
+  clustering_distance_cols = distMatrix,
+  col = colorRampPalette(rev(brewer.pal(9, "Blues")))(255),
+  main = "Pearson Correlation Heatmap"
+)
+
+
+```
