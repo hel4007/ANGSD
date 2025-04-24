@@ -8,8 +8,9 @@
 #SBATCH -p angsd_class
 
 
-SRA_LIST=("SRR28279790" "SRR28279788" "SRR28279792")
+SRA_LIST=("SRR28279786" "SRR28279790" "SRR28279788" "SRR28279792")
 declare -A NAME_MAP=(
+  ["SRR28279786"] ="female_openEye_Z08_86"
   ["SRR28279790"]="female_openEye_Z08_90"
   ["SRR28279788"]="female_occludedEye_Z08_88"
   ["SRR28279792"]="female_occludedEye_Z08_92"
