@@ -129,15 +129,15 @@ gene_counts_matrix <- gene_counts_table[, -c(1:6)]
 
 # Rename columns to the four sample names
 colnames(gene_counts_matrix) <- c(
-  "OpenEye_86", 
-  "OpenEye_90", 
   "OcclEye_88", 
-  "OcclEye_92"
+  "OcclEye_92", 
+  "OpenEye_86", 
+  "OpenEye_90"
 )
 
 sample_info <- data.frame(
-  row.names = c("OpenEye_86", "OpenEye_90", "OcclEye_88", "OcclEye_92"),
-  condition = c("openEye", "openEye", "occludedEye", "occludedEye")
+  row.names = c("OcclEye_88", "OcclEye_92", "OpenEye_86", "OpenEye_90"),
+  condition = c("OcclEye", "OcclEye", "OpenEye", "OpenEye")
 )
 
 # filter out low-expression genes
