@@ -129,15 +129,15 @@ gene_counts_matrix <- gene_counts_table[, -c(1:6)]
 
 # Rename columns to the four sample names
 colnames(gene_counts_matrix) <- c(
-  "OcclEye_88", 
-  "OcclEye_92", 
   "OpenEye_86", 
-  "OpenEye_90"
+  "OpenEye_90", 
+  "OcclEye_88", 
+  "OcclEye_92"
 )
 
 sample_info <- data.frame(
-  row.names = c("OcclEye_88", "OcclEye_92", "OpenEye_86", "OpenEye_90"),
-  condition = c("OcclEye", "OcclEye", "OpenEye", "OpenEye")
+  row.names = c("OpenEye_86", "OpenEye_90", "OcclEye_88", "OcclEye_92"),
+  condition = c("openEye", "openEye", "occludedEye", "occludedEye")
 )
 
 # filter out low-expression genes
@@ -173,12 +173,21 @@ boxplot(
 )
 
 # Visualize counts for a particular gene
-geneOfInterest <- rownames(dds)[1] 
+per2_id <- "ENSGALG00010025047"
+
+res <- results(dds,
+               contrast = c("condition", "occludedEye", "openEye"),
+               alpha    = 0.05)
+
+pval <- res[per2_id, "pvalue"]
+
+# Plot counts
 plotCounts(
   dds,
-  gene     = geneOfInterest,
+  gene     = per2_id,
   intgroup = "condition",
-  main     = paste("Counts for gene:", geneOfInterest)
+  main     = paste0("Counts for PER2 (", per2_id, ")"),
+  sub      = paste0("p = ", signif(pval, 3))
 )
 ```
 
